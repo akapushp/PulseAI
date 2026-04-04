@@ -38,9 +38,34 @@ def add_trend_entry(log, value):
             entry['value'] = value
             return log
     log.append({"date": today, "value": value})
+    # Keep last 14 days for the trend chart
     return log[-14:] 
 
-# --- 3. CHAT CALLBACK ---
+# --- 3. DYNAMIC TARGET CALCULATOR ---
+def calculate_dynamic_target(user_data):
+    # Mifflin-St Jeor Equation:
+    # BMR = (10 × weight in kg) + (6.25 × height in cm) - (5 × age) + 5
+    weight = float(user_data.get('weight', 70))
+    height = float(user_data.get('height_cm', 170))
+    age = int(user_data.get('age', 30))
+    
+    bmr = (10 * weight) + (6.25 * height) - (5 * age) + 5
+    
+    # Goal Adjustment
+    goal = user_data.get('goal', 'Longevity')
+    if goal == "Fat Loss":
+        offset = -500
+    elif goal == "Muscle Build":
+        offset = 300
+    else:
+        offset = 0
+        
+    # Activity Bonus: ~0.04 kcal burned per step
+    step_bonus = user_data.get('daily_steps', 0) * 0.04
+    
+    return int(bmr + offset + step_bonus)
+
+# --- 4. CHAT CALLBACK ---
 def handle_chat():
     prompt = st.session_state.chat_input_box
     if not prompt: return
@@ -48,36 +73,42 @@ def handle_chat():
     user_data = st.session_state.user_data
     username = st.session_state.logged_in_user
     
+    # Track interaction
     user_data['chat_history'].insert(0, {"role": "user", "content": prompt})
     
     coach = Agent(
         model=Groq(id="llama-3.3-70b-versatile", api_key=my_groq_key), 
-        instructions=[f"Pulse Engine for {user_data.get('name')}. Log metrics as 'UPDATE: [type] [value]' (calories/steps/weight) or give short coaching tips."]
+        instructions=[
+            f"You are Pulse AI, the digital health coach for {user_data.get('name')}.",
+            "If the user mentions food or calories, reply with 'UPDATE: calories [number]'.",
+            "If the user mentions steps, reply with 'UPDATE: steps [number]'.",
+            "If the user mentions weight, reply with 'UPDATE: weight [number]'.",
+            "Otherwise, provide elite, concise health and performance coaching."
+        ]
     )
     
     response = coach.run(prompt).content
     
+    # Logic to parse AI commands
     if "UPDATE:" in response:
-        if "calories" in response.lower():
-            val = re.findall(r'\d+', response)
-            if val: user_data['daily_calories'] += int(val[0])
-        elif "steps" in response.lower():
-            val = re.findall(r'\d+', response)
-            if val: user_data['daily_steps'] += int(val[0])
-        elif "weight" in response.lower():
-            val = re.findall(r'\d+\.?\d*', response)
-            if val: 
-                w = float(val[0])
-                user_data['weight'] = w
-                user_data['bmi'] = round(w / ((user_data['height_cm'] / 100)**2), 1)
-                user_data['weight_log'] = add_trend_entry(user_data['weight_log'], w)
+        nums = re.findall(r'\d+\.?\d*', response)
+        if nums:
+            val = float(nums[0])
+            if "calories" in response.lower():
+                user_data['daily_calories'] += int(val)
+            elif "steps" in response.lower():
+                user_data['daily_steps'] += int(val)
+            elif "weight" in response.lower():
+                user_data['weight'] = val
+                user_data['bmi'] = round(val / ((user_data['height_cm'] / 100)**2), 1)
+                user_data['weight_log'] = add_trend_entry(user_data['weight_log'], val)
     else:
         user_data['chat_history'].insert(1, {"role": "assistant", "content": response})
     
     save_user_data(username, user_data)
     st.session_state.chat_input_box = ""
 
-# --- 4. UI STYLING (Premium iOS) ---
+# --- 5. UI STYLING ---
 st.set_page_config(page_title="Pulse AI", page_icon="⚡", layout="wide")
 st.markdown("""
     <style>
@@ -102,73 +133,82 @@ def main():
     if 'logged_in_user' not in st.session_state:
         st.session_state.logged_in_user = None
 
-    # --- A. LOGIN & SIGNUP (Branded) ---
+    # --- A. AUTHENTICATION ---
     if st.session_state.logged_in_user is None:
         st.title("⚡ Pulse AI — Digital Health")
         tab1, tab2 = st.tabs(["Login", "Create Account"])
         with tab1:
-            u_login = st.text_input("Username", key="l_user").lower().strip()
-            p_login = st.text_input("Password", type="password", key="l_pass")
+            u_login = st.text_input("Username").lower().strip()
+            p_login = st.text_input("Password", type="password")
             if st.button("Sign In", use_container_width=True):
                 data = load_user_data(u_login)
                 if data and data.get("password") == p_login:
                     st.session_state.logged_in_user = u_login
                     st.session_state.user_data = data
                     st.rerun()
-                else: st.error("Invalid credentials")
+                else:
+                    st.error("Invalid credentials.")
         with tab2:
-            u_signup = st.text_input("New Username", key="s_user").lower().strip()
-            p_signup = st.text_input("Set Password", type="password", key="s_pass")
+            u_signup = st.text_input("Choose Username").lower().strip()
+            p_signup = st.text_input("Choose Password", type="password")
             if st.button("Create Account", use_container_width=True):
                 if u_signup and p_signup:
-                    if os.path.exists(get_user_file(u_signup)): st.error("Username exists")
+                    if os.path.exists(get_user_file(u_signup)):
+                        st.error("Username already taken.")
                     else:
                         save_user_data(u_signup, {"password": p_signup, "onboarded": False})
-                        st.success("Account created! Switch to Login tab.")
+                        st.success("Account created! You can now login.")
         return
 
     user_data = st.session_state.user_data
     username = st.session_state.logged_in_user
 
     # --- B. ONBOARDING ---
-    if user_data.get("onboarded") is False:
-        st.title(f"Welcome back, {username.capitalize()}!")
-        st.subheader("Configure your protocol")
-        with st.form("onboard"):
-            c1, c2 = st.columns(2)
-            name = c1.text_input("Full Name")
-            age = c1.number_input("Age", 18, 100, 25)
-            feet = c1.selectbox("Height (Feet)", [4, 5, 6, 7], index=1)
-            inches = c1.selectbox("Height (Inches)", list(range(12)), index=9)
-            weight = c2.number_input("Weight (kg)", 40.0, 200.0, 75.0)
-            goal = c2.selectbox("Goal", ["Fat Loss", "Muscle Build", "Longevity", "Strength"])
-            diet = c2.selectbox("Diet", ["Vegetarian", "Non-vegetarian", "Keto", "Vegan"])
-            if st.form_submit_button("Generate AI Protocol"):
-                with st.spinner("AI is crafting your plan..."):
-                    model = Groq(id="llama-3.3-70b-versatile", api_key=my_groq_key)
+    if not user_data.get("onboarded"):
+        st.title(f"Configure Your Protocol, {username.capitalize()}")
+        with st.form("onboarding_form"):
+            col1, col2 = st.columns(2)
+            name = col1.text_input("Full Name")
+            age = col1.number_input("Age", 18, 100, 25)
+            feet = col1.selectbox("Height (Feet)", [4, 5, 6, 7], index=1)
+            inches = col1.selectbox("Height (Inches)", list(range(12)), index=9)
+            
+            weight = col2.number_input("Current Weight (kg)", 40.0, 200.0, 75.0)
+            goal = col2.selectbox("Primary Goal", ["Fat Loss", "Muscle Build", "Longevity", "Strength"])
+            diet = col2.selectbox("Dietary Preference", ["Vegetarian", "Non-vegetarian", "Keto", "Vegan"])
+            
+            if st.form_submit_button("Initialize AI Health Plan"):
+                with st.spinner("Pulse AI is calculating your protocols..."):
                     h_cm = (feet * 30.48) + (inches * 2.54)
-                    diet_p = Agent(model=model).run(f"Meal plan for {diet} goal {goal}").content
-                    fit_p = Agent(model=model).run(f"Workout for {goal}").content
+                    model = Groq(id="llama-3.3-70b-versatile", api_key=my_groq_key)
+                    
+                    # Generate protocols
+                    diet_p = Agent(model=model).run(f"Create a {diet} meal plan for {goal}").content
+                    fit_p = Agent(model=model).run(f"Create a workout routine for {goal}").content
+                    
                     user_data.update({
-                        "onboarded": True, "name": name, "age": age, "weight": weight, "height_cm": h_cm,
-                        "goal": goal, "diet_plan": diet_p, "fit_plan": fit_p, "readiness": 100,
-                        "daily_steps": 0, "daily_calories": 0, "calorie_target": 2500,
+                        "onboarded": True,
+                        "name": name, "age": age, "weight": weight, "height_cm": h_cm,
+                        "goal": goal, "diet_plan": diet_p, "fit_plan": fit_p,
+                        "readiness": 100, "daily_steps": 0, "daily_calories": 0,
                         "bmi": round(weight / ((h_cm/100)**2), 1),
-                        "chat_history": [], "weight_log": [{"date": datetime.now().strftime("%Y-%m-%d"), "value": weight}], "recovery_log": []
+                        "chat_history": [],
+                        "weight_log": [{"date": datetime.now().strftime("%Y-%m-%d"), "value": weight}]
                     })
                     save_user_data(username, user_data)
                     st.rerun()
         return
 
-    # --- C. SIDEBAR (With Soft Reset) ---
+    # --- C. SIDEBAR ---
     with st.sidebar:
         st.markdown(f"### 👤 {user_data.get('name', 'User')}")
         st.markdown("<div class='sidebar-box'>", unsafe_allow_html=True)
-        st.write("📈 **Daily Progress**")
-        new_w = st.number_input("Weight (kg)", value=float(user_data.get('weight', 75.0)), step=0.1)
+        st.write("📈 **Manual Update**")
+        new_w = st.number_input("Weight (kg)", value=float(user_data['weight']), step=0.1)
         new_s = st.number_input("Add Steps", value=0, step=500)
         new_c = st.number_input("Add Calories", value=0, step=100)
-        if st.button("Update Metrics"):
+        
+        if st.button("Sync Vitality Data", use_container_width=True):
             user_data['weight'] = new_w
             user_data['daily_steps'] += new_s
             user_data['daily_calories'] += new_c
@@ -183,54 +223,57 @@ def main():
             st.rerun()
             
         if st.button("🔄 Reset Health Profile", use_container_width=True):
-            reset_data = {"password": user_data["password"], "onboarded": False}
-            save_user_data(username, reset_data)
-            st.session_state.user_data = reset_data
+            user_data["onboarded"] = False
+            save_user_data(username, user_data)
             st.rerun()
 
-    # --- D. DASHBOARD HEADER (Personalized) ---
+    # --- D. DASHBOARD HEADER ---
     st.markdown(f"<h1>{user_data['name']}'s Digital Health</h1>", unsafe_allow_html=True)
     
+    # --- E. 5 KPI TILES ---
+    dyn_target = calculate_dynamic_target(user_data)
     k1, k2, k3, k4, k5 = st.columns(5)
-    with k1: 
+    
+    with k1: # Recovery
         st.markdown(f"<div class='pulse-card'><span class='metric-title'>Recovery</span><span class='metric-value'>{user_data['readiness']}%</span><div class='progress-bg'><div class='progress-fill' style='width:{user_data['readiness']}%; background:#34C759;'></div></div></div>", unsafe_allow_html=True)
-    with k2: 
+    
+    with k2: # Steps
         s_pct = min(100, (user_data['daily_steps'] / 10000) * 100)
         st.markdown(f"<div class='pulse-card'><span class='metric-title'>Steps</span><span class='metric-value'>{user_data['daily_steps']:,}</span><div class='progress-bg'><div class='progress-fill' style='width:{s_pct}%; background:#007AFF;'></div></div></div>", unsafe_allow_html=True)
-    with k3: 
-        bmi = user_data['bmi']
-        dash = 125.66 * (1 - min(bmi, 40) / 40)
-        st.markdown(f"<div class='pulse-card'><span class='metric-title'>BMI Index</span><div style='display:flex; justify-content:space-between; align-items:center;'><span class='metric-value'>{bmi}</span><svg viewBox='0 0 100 60' width='50px'><path d='M 10 50 A 40 40 0 0 1 90 50' fill='none' stroke='#EEE' stroke-width='12' stroke-linecap='round' /><path d='M 10 50 A 40 40 0 0 1 90 50' fill='none' stroke='#007AFF' stroke-width='12' stroke-linecap='round' stroke-dasharray='125.66' stroke-dashoffset='{dash}'/></svg></div></div>", unsafe_allow_html=True)
-    with k4: 
-        c_pct = min(100, (user_data['daily_calories'] / user_data['calorie_target']) * 100)
-        st.markdown(f"<div class='pulse-card'><span class='metric-title'>Fuel (kcal)</span><span class='metric-value'>{user_data['daily_calories']}</span><div class='progress-bg'><div class='progress-fill' style='width:{c_pct}%; background:#FF9500;'></div></div></div>", unsafe_allow_html=True)
-    with k5: 
-        st.markdown(f"<div class='pulse-card'><span class='metric-title'>Goal Focus</span><span class='metric-value' style='font-size:1.1rem;'>{user_data['goal']}</span></div>", unsafe_allow_html=True)
+    
+    with k3: # BMI
+        bmi_val = user_data['bmi']
+        st.markdown(f"<div class='pulse-card'><span class='metric-title'>BMI Index</span><span class='metric-value'>{bmi_val}</span><div style='color:#8E8E93; font-size:0.7rem;'>PROPORTIONAL WEIGHT</div></div>", unsafe_allow_html=True)
+    
+    with k4: # Fuel (Dynamic Target)
+        f_pct = min(100, (user_data['daily_calories'] / dyn_target) * 100)
+        st.markdown(f"<div class='pulse-card'><span class='metric-title'>Fuel Status</span><span class='metric-value'>{user_data['daily_calories']} <small style='font-size:14px; color:#8E8E93;'>/ {dyn_target}</small></span><div class='progress-bg'><div class='progress-fill' style='width:{f_pct}%; background:#FF9500;'></div></div></div>", unsafe_allow_html=True)
+    
+    with k5: # Goal Focus
+        st.markdown(f"<div class='pulse-card'><span class='metric-title'>Focus</span><span class='metric-value' style='font-size:1.2rem;'>{user_data['goal'].upper()}</span><div style='color:#8E8E93; font-size:0.7rem;'>ACTIVE PROTOCOL</div></div>", unsafe_allow_html=True)
 
-    # --- TABS ---
+    # --- F. TABS ---
     t1, t2, t3, t4 = st.tabs(["🥗 NUTRITION", "🏋️ TRAINING", "📈 TRENDS", "💬 SMART COACH"])
     
     with t1: 
-        st.markdown(f"### Daily Fuel Plan")
+        st.markdown("### Personalized Nutrition Protocol")
         st.markdown(f"<div style='background:white; padding:25px; border-radius:24px; border:1px solid #EEE; color:#1C1C1E;'>{user_data['diet_plan']}</div>", unsafe_allow_html=True)
     
     with t2: 
-        st.markdown(f"### Training Protocol")
+        st.markdown("### Precision Training Plan")
         st.markdown(f"<div style='background:white; padding:25px; border-radius:24px; border:1px solid #EEE; color:#1C1C1E;'>{user_data['fit_plan']}</div>", unsafe_allow_html=True)
     
     with t3:
-        if len(user_data['weight_log']) > 0:
-            st.markdown("### Weight Progress")
-            df = pd.DataFrame(user_data['weight_log']).set_index('date')
-            st.line_chart(df)
-        else: st.info("No trend data yet. Update your metrics in the sidebar!")
+        st.markdown("### Weight Evolution")
+        df = pd.DataFrame(user_data['weight_log']).set_index('date')
+        st.line_chart(df)
             
     with t4:
-        st.markdown("### Chat with Pulse AI")
-        st.text_input("Talk to your coach...", key="chat_input_box", on_change=handle_chat, placeholder="e.g., 'What should I eat for dinner?'")
+        st.markdown("### Consult Smart Coach")
+        st.text_input("Message Coach...", key="chat_input_box", on_change=handle_chat, placeholder="e.g. 'I just ran 5km' or 'Log 500 calories'")
         st.markdown("---")
         for msg in user_data['chat_history']:
-            with st.chat_message(msg["role"]): 
+            with st.chat_message(msg["role"]):
                 st.markdown(msg["content"])
 
 if __name__ == "__main__":
