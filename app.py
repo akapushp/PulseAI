@@ -28,13 +28,6 @@ def load_user_data(username):
         try:
             with open(filename, "r") as f:
                 data = json.load(f)
-                defaults = {
-                    'weight_log': [], 'recovery_log': [], 'chat_history': [], 
-                    'daily_calories': 0, 'daily_steps': 0, 'readiness': 100,
-                    'calorie_target': 2500
-                }
-                for k, v in defaults.items():
-                    if k not in data: data[k] = v
                 return data
         except: return None
     return None
@@ -60,7 +53,7 @@ def handle_chat():
     
     coach = Agent(
         model=Groq(id="llama-3.3-70b-versatile", api_key=my_groq_key), 
-        instructions=[f"Pulse Engine for {user_data['name']}. Log metrics as 'UPDATE: [type] [value]' (calories/steps/weight) or give short coaching tips."]
+        instructions=[f"Pulse Engine for {user_data.get('name', 'User')}. Log metrics as 'UPDATE: [type] [value]' (calories/steps/weight) or give short coaching tips."]
     )
     
     response = coach.run(prompt).content
@@ -85,7 +78,7 @@ def handle_chat():
     save_user_data(username, user_data)
     st.session_state.chat_input_box = ""
 
-# --- 4. UI STYLING ---
+# --- 4. UI STYLING (iOS Premium) ---
 st.set_page_config(page_title="Pulse AI", page_icon="⚡", layout="wide")
 st.markdown("""
     <style>
@@ -101,64 +94,81 @@ st.markdown("""
     .progress-bg { background: #F2F2F7; border-radius: 10px; height: 8px; width: 100%; margin-top: 10px; overflow: hidden; }
     .progress-fill { height: 100%; border-radius: 10px; transition: width 0.6s ease; }
     .sidebar-box { background: #FFFFFF; border-radius: 16px; padding: 16px; border: 1px solid #E5E5EA; margin-bottom: 15px; }
+    .stTabs [aria-selected="true"] { background: #111111 !important; color: #FFFFFF !important; border-radius: 12px !important; }
     </style>
     """, unsafe_allow_html=True)
 
+# --- 5. MAIN LOGIC ---
 def main():
     if 'logged_in_user' not in st.session_state:
         st.session_state.logged_in_user = None
 
+    # --- LOGIN / SIGNUP ---
     if st.session_state.logged_in_user is None:
-        st.title("⚡ Pulse AI Login")
-        u = st.text_input("Username").lower().strip()
-        p = st.text_input("Password", type="password")
-        if st.button("Access Dashboard", use_container_width=True):
-            if u and p == "pulse2026":
-                st.session_state.logged_in_user = u
-                st.session_state.user_data = load_user_data(u)
-                st.rerun()
+        st.title("⚡ Pulse AI Portal")
+        tab1, tab2 = st.tabs(["Login", "Create Account"])
+        
+        with tab1:
+            u_login = st.text_input("Username", key="l_user").lower().strip()
+            p_login = st.text_input("Password", type="password", key="l_pass")
+            if st.button("Sign In", use_container_width=True):
+                data = load_user_data(u_login)
+                if data and data.get("password") == p_login:
+                    st.session_state.logged_in_user = u_login
+                    st.session_state.user_data = data
+                    st.rerun()
+                else:
+                    st.error("Invalid credentials")
+        
+        with tab2:
+            u_signup = st.text_input("New Username", key="s_user").lower().strip()
+            p_signup = st.text_input("Set Password", type="password", key="s_pass")
+            p_confirm = st.text_input("Confirm Password", type="password", key="s_conf")
+            if st.button("Create Account", use_container_width=True):
+                if not u_signup or not p_signup: st.warning("Fields cannot be empty")
+                elif p_signup != p_confirm: st.error("Passwords mismatch")
+                elif os.path.exists(get_user_file(u_signup)): st.error("Username taken")
+                else:
+                    save_user_data(u_signup, {"password": p_signup, "onboarded": False})
+                    st.success("Account created! Switch to Login tab.")
         return
 
     user_data = st.session_state.user_data
     username = st.session_state.logged_in_user
 
-    # --- ONBOARDING (REPAIRED) ---
-    if user_data is None:
-        st.title("Setup Your Health Protocol")
-        with st.form("onboarding_form"):
-            col1, col2 = st.columns(2)
-            with col1:
-                name = st.text_input("Full Name")
-                age = st.number_input("Age", 18, 100, 25)
-                feet = st.selectbox("Height (Feet)", [4, 5, 6, 7], index=1)
-                inches = st.selectbox("Height (Inches)", list(range(12)), index=9)
-            with col2:
-                weight = st.number_input("Weight (kg)", 40.0, 250.0, 75.0)
-                goal = st.selectbox("Primary Goal", ["Fat Loss", "Muscle Build", "Longevity", "Strength"])
-                diet = st.selectbox("Diet Preference", ["Vegetarian", "Non-vegetarian", "Keto", "Vegan", "Gluten-Free"])
+    # --- ONBOARDING ---
+    if user_data.get("onboarded") is False:
+        st.title(f"Welcome, {username.capitalize()}")
+        st.subheader("Initialize your Health Protocol")
+        with st.form("onboard"):
+            c1, c2 = st.columns(2)
+            name = c1.text_input("Full Name")
+            age = c1.number_input("Age", 18, 100, 25)
+            feet = c1.selectbox("Height (Feet)", [4, 5, 6, 7], index=1)
+            inches = c1.selectbox("Height (Inches)", list(range(12)), index=9)
+            weight = c2.number_input("Weight (kg)", 40.0, 200.0, 75.0)
+            goal = c2.selectbox("Goal", ["Fat Loss", "Muscle Build", "Longevity", "Strength"])
+            diet = c2.selectbox("Diet", ["Vegetarian", "Non-vegetarian", "Keto", "Vegan"])
             
-            if st.form_submit_button("Generate My AI Protocol"):
-                with st.spinner("AI is crafting your meal and workout plans..."):
+            if st.form_submit_button("Generate AI Protocol"):
+                with st.spinner("AI is crafting your plan..."):
                     model = Groq(id="llama-3.3-70b-versatile", api_key=my_groq_key)
-                    height_cm = (feet * 30.48) + (inches * 2.54)
+                    h_cm = (feet * 30.48) + (inches * 2.54)
+                    diet_p = Agent(model=model).run(f"Meal plan for {diet} goal {goal}").content
+                    fit_p = Agent(model=model).run(f"Workout for {goal}").content
                     
-                    # Force AI Generation immediately
-                    diet_p = Agent(model=model).run(f"Create a detailed {diet} meal plan for the goal: {goal}").content
-                    fit_p = Agent(model=model).run(f"Create a detailed workout routine for the goal: {goal}").content
-                    
-                    new_data = {
-                        "name": name, "age": age, "weight": weight, "height_cm": height_cm, "goal": goal,
-                        "diet_plan": diet_p, "fit_plan": fit_p, "readiness": 100, 
+                    user_data.update({
+                        "onboarded": True, "name": name, "age": age, "weight": weight,
+                        "height_cm": h_cm, "goal": goal, "diet_plan": diet_p, "fit_plan": fit_p,
+                        "bmi": round(weight / ((h_cm/100)**2), 1), "readiness": 100,
                         "daily_steps": 0, "daily_calories": 0, "calorie_target": 2500,
-                        "bmi": round(weight / ((height_cm/100)**2), 1),
                         "chat_history": [], "weight_log": [], "recovery_log": []
-                    }
-                    save_user_data(username, new_data)
-                    st.session_state.user_data = new_data
+                    })
+                    save_user_data(username, user_data)
                     st.rerun()
         return
 
-    # --- FULL SIDEBAR RESTORED ---
+    # --- DASHBOARD ---
     with st.sidebar:
         st.markdown(f"### 👤 {user_data['name']}")
         st.markdown("<div class='sidebar-box'>", unsafe_allow_html=True)
@@ -171,44 +181,37 @@ def main():
             save_user_data(username, user_data)
             st.rerun()
         st.markdown("</div>", unsafe_allow_html=True)
-        
-        if st.sidebar.button("Logout", use_container_width=True):
+        if st.button("Logout", use_container_width=True):
             st.session_state.logged_in_user = None
             st.rerun()
-        
-        if st.sidebar.button("🛑 Reset Profile", use_container_width=True):
-            filename = get_user_file(username)
-            if os.path.exists(filename): os.remove(filename)
-            st.session_state.user_data = None
+        if st.button("🛑 Reset Profile", use_container_width=True):
+            os.remove(get_user_file(username))
+            st.session_state.logged_in_user = None
             st.rerun()
 
-    # --- DASHBOARD ---
     st.markdown("<h1>⚡ Pulse Dashboard</h1>", unsafe_allow_html=True)
-    
     k1, k2, k3, k4, k5 = st.columns(5)
-    with k1:
-        st.markdown(f"<div class='pulse-card'><span class='metric-title'>Recovery</span><span class='metric-value'>{user_data['readiness']}%</span><div class='progress-bg'><div class='progress-fill' style='width:{user_data['readiness']}%; background:#34C759;'></div></div></div>", unsafe_allow_html=True)
-    with k2:
+    with k1: st.markdown(f"<div class='pulse-card'><span class='metric-title'>Recovery</span><span class='metric-value'>{user_data['readiness']}%</span><div class='progress-bg'><div class='progress-fill' style='width:{user_data['readiness']}%; background:#34C759;'></div></div></div>", unsafe_allow_html=True)
+    with k2: 
         s_pct = min(100, (user_data['daily_steps'] / 10000) * 100)
         st.markdown(f"<div class='pulse-card'><span class='metric-title'>Steps</span><span class='metric-value'>{user_data['daily_steps']:,}</span><div class='progress-bg'><div class='progress-fill' style='width:{s_pct}%; background:#007AFF;'></div></div></div>", unsafe_allow_html=True)
-    with k3:
+    with k3: 
         bmi = user_data['bmi']
         dash = 125.66 * (1 - min(bmi, 40) / 40)
         st.markdown(f"<div class='pulse-card'><span class='metric-title'>BMI Index</span><div style='display:flex; justify-content:space-between; align-items:center;'><span class='metric-value'>{bmi}</span><svg viewBox='0 0 100 60' width='50px'><path d='M 10 50 A 40 40 0 0 1 90 50' fill='none' stroke='#EEE' stroke-width='12' stroke-linecap='round' /><path d='M 10 50 A 40 40 0 0 1 90 50' fill='none' stroke='#007AFF' stroke-width='12' stroke-linecap='round' stroke-dasharray='125.66' stroke-dashoffset='{dash}'/></svg></div></div>", unsafe_allow_html=True)
-    with k4:
+    with k4: 
         c_pct = min(100, (user_data['daily_calories'] / user_data['calorie_target']) * 100)
         st.markdown(f"<div class='pulse-card'><span class='metric-title'>Fuel (kcal)</span><span class='metric-value'>{user_data['daily_calories']}</span><div class='progress-bg'><div class='progress-fill' style='width:{c_pct}%; background:#FF9500;'></div></div></div>", unsafe_allow_html=True)
-    with k5:
-        st.markdown(f"<div class='pulse-card'><span class='metric-title'>Goal Focus</span><span class='metric-value' style='font-size:1.1rem;'>{user_data['goal']}</span></div>", unsafe_allow_html=True)
+    with k5: st.markdown(f"<div class='pulse-card'><span class='metric-title'>Goal Focus</span><span class='metric-value' style='font-size:1.1rem;'>{user_data['goal']}</span></div>", unsafe_allow_html=True)
 
     t1, t2, t3, t4 = st.tabs(["🥗 NUTRITION", "🏋️ TRAINING", "📈 TRENDS", "💬 SMART COACH"])
     with t1: st.markdown(f"<div style='background:white; padding:25px; border-radius:24px; border:1px solid #EEE;'>{user_data['diet_plan']}</div>", unsafe_allow_html=True)
     with t2: st.markdown(f"<div style='background:white; padding:25px; border-radius:24px; border:1px solid #EEE;'>{user_data['fit_plan']}</div>", unsafe_allow_html=True)
     with t3:
         ca, cb = st.columns(2)
-        if user_data['weight_log']:
+        if user_data.get('weight_log'):
             with ca: st.markdown("**Weight (KG)**"); st.line_chart(pd.DataFrame(user_data['weight_log']).set_index('date'))
-        if user_data['recovery_log']:
+        if user_data.get('recovery_log'):
             with cb: st.markdown("**Recovery (%)**"); st.line_chart(pd.DataFrame(user_data['recovery_log']).set_index('date'))
     with t4:
         st.text_input("Command Coach", key="chat_input_box", on_change=handle_chat, placeholder="Log 500 calories...")
