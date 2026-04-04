@@ -183,37 +183,50 @@ def main():
             st.session_state.logged_in_user = None
             st.rerun()
 
-    # --- D. FULL DASHBOARD ---
+    # --- D. DASHBOARD ---
     st.markdown("<h1>⚡ Pulse Dashboard</h1>", unsafe_allow_html=True)
     k1, k2, k3, k4, k5 = st.columns(5)
-    with k1: # Recovery
+    with k1: 
         st.markdown(f"<div class='pulse-card'><span class='metric-title'>Recovery</span><span class='metric-value'>{user_data['readiness']}%</span><div class='progress-bg'><div class='progress-fill' style='width:{user_data['readiness']}%; background:#34C759;'></div></div></div>", unsafe_allow_html=True)
-    with k2: # Steps
+    with k2: 
         s_pct = min(100, (user_data['daily_steps'] / 10000) * 100)
         st.markdown(f"<div class='pulse-card'><span class='metric-title'>Steps</span><span class='metric-value'>{user_data['daily_steps']:,}</span><div class='progress-bg'><div class='progress-fill' style='width:{s_pct}%; background:#007AFF;'></div></div></div>", unsafe_allow_html=True)
-    with k3: # BMI Dial
+    with k3: 
         bmi = user_data['bmi']
         dash = 125.66 * (1 - min(bmi, 40) / 40)
         st.markdown(f"<div class='pulse-card'><span class='metric-title'>BMI Index</span><div style='display:flex; justify-content:space-between; align-items:center;'><span class='metric-value'>{bmi}</span><svg viewBox='0 0 100 60' width='50px'><path d='M 10 50 A 40 40 0 0 1 90 50' fill='none' stroke='#EEE' stroke-width='12' stroke-linecap='round' /><path d='M 10 50 A 40 40 0 0 1 90 50' fill='none' stroke='#007AFF' stroke-width='12' stroke-linecap='round' stroke-dasharray='125.66' stroke-dashoffset='{dash}'/></svg></div></div>", unsafe_allow_html=True)
-    with k4: # Fuel
+    with k4: 
         c_pct = min(100, (user_data['daily_calories'] / user_data['calorie_target']) * 100)
         st.markdown(f"<div class='pulse-card'><span class='metric-title'>Fuel (kcal)</span><span class='metric-value'>{user_data['daily_calories']}</span><div class='progress-bg'><div class='progress-fill' style='width:{c_pct}%; background:#FF9500;'></div></div></div>", unsafe_allow_html=True)
-    with k5: # Goal
+    with k5: 
         st.markdown(f"<div class='pulse-card'><span class='metric-title'>Goal Focus</span><span class='metric-value' style='font-size:1.1rem;'>{user_data['goal']}</span></div>", unsafe_allow_html=True)
 
-    t1, t2, t3, t4 = st.tabs(["💬 SMART COACH", "🥗 NUTRITION", "🏋️ TRAINING", "📈 TRENDS"])
-    with t1:
-        st.text_input("Command Coach", key="chat_input_box", on_change=handle_chat, placeholder="Log 500 calories...")
+    # --- TABS (Nutrition First Order) ---
+    t1, t2, t3, t4 = st.tabs(["🥗 NUTRITION", "🏋️ TRAINING", "📈 TRENDS", "💬 SMART COACH"])
+    
+    with t1: 
+        st.markdown(f"### Daily Fuel Plan for {user_data['name']}")
+        st.markdown(f"<div style='background:white; padding:25px; border-radius:24px; border:1px solid #EEE; color:#1C1C1E;'>{user_data['diet_plan']}</div>", unsafe_allow_html=True)
+    
+    with t2: 
+        st.markdown(f"### Training Protocol: {user_data['goal']}")
+        st.markdown(f"<div style='background:white; padding:25px; border-radius:24px; border:1px solid #EEE; color:#1C1C1E;'>{user_data['fit_plan']}</div>", unsafe_allow_html=True)
+    
+    with t3:
+        if len(user_data['weight_log']) > 0:
+            st.markdown("### Weight Progress (Last 14 Days)")
+            df = pd.DataFrame(user_data['weight_log']).set_index('date')
+            st.line_chart(df)
+        else: 
+            st.info("No trend data yet. Update your metrics in the sidebar!")
+            
+    with t4:
+        st.markdown("### Chat with Pulse AI")
+        st.text_input("Ask about your diet, workouts, or log progress...", key="chat_input_box", on_change=handle_chat, placeholder="e.g., 'Log 400 calories'")
         st.markdown("---")
         for msg in user_data['chat_history']:
-            with st.chat_message(msg["role"]): st.markdown(msg["content"])
-    with t2: st.markdown(f"<div style='background:white; padding:25px; border-radius:24px; border:1px solid #EEE;'>{user_data['diet_plan']}</div>", unsafe_allow_html=True)
-    with t3: st.markdown(f"<div style='background:white; padding:25px; border-radius:24px; border:1px solid #EEE;'>{user_data['fit_plan']}</div>", unsafe_allow_html=True)
-    with t4:
-        if len(user_data['weight_log']) > 0:
-            st.markdown("**Weight Progress (14 Days)**")
-            st.line_chart(pd.DataFrame(user_data['weight_log']).set_index('date'))
-        else: st.info("No trend data yet. Start logging in the sidebar!")
+            with st.chat_message(msg["role"]): 
+                st.markdown(msg["content"])
 
 if __name__ == "__main__":
     main()
