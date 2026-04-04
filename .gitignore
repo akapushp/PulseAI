@@ -1,0 +1,24 @@
+# --- Pulse AI Private Data ---
+# These contain your weight, health logs, and chat history
+*.json
+pulse_user_data.json
+data_*.json
+
+# --- Secrets and API Keys ---
+# Never upload your Groq key or local settings
+.env
+.streamlit/secrets.toml
+
+# --- Python Environment ---
+# Junk files created when you run Python locally
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+env/
+.env
+
+# --- OS Specific Files ---
+# Folder icons and system metadata
+.DS_Store
+Thumbs.db
