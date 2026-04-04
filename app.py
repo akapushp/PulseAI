@@ -77,7 +77,7 @@ def handle_chat():
     save_user_data(username, user_data)
     st.session_state.chat_input_box = ""
 
-# --- 4. UI STYLING (Premium iOS) ---
+# --- 4. UI STYLING ---
 st.set_page_config(page_title="Pulse AI", page_icon="⚡", layout="wide")
 st.markdown("""
     <style>
@@ -129,9 +129,10 @@ def main():
     user_data = st.session_state.user_data
     username = st.session_state.logged_in_user
 
-    # --- B. FULL ONBOARDING ---
+    # --- B. ONBOARDING (Soft Reset aware) ---
     if user_data.get("onboarded") is False:
-        st.title(f"Welcome, {username.capitalize()}!")
+        st.title(f"Welcome back, {username.capitalize()}!")
+        st.subheader("Configure your new protocol")
         with st.form("onboard"):
             c1, c2 = st.columns(2)
             name = c1.text_input("Full Name")
@@ -158,12 +159,12 @@ def main():
                     st.rerun()
         return
 
-    # --- C. FULL SIDEBAR ---
+    # --- C. SIDEBAR (Soft Reset Integrated) ---
     with st.sidebar:
-        st.markdown(f"### 👤 {user_data['name']}")
+        st.markdown(f"### 👤 {user_data.get('name', 'User')}")
         st.markdown("<div class='sidebar-box'>", unsafe_allow_html=True)
         st.write("📈 **Daily Progress**")
-        new_w = st.number_input("Weight (kg)", value=float(user_data['weight']), step=0.1)
+        new_w = st.number_input("Weight (kg)", value=float(user_data.get('weight', 75.0)), step=0.1)
         new_s = st.number_input("Add Steps", value=0, step=500)
         new_c = st.number_input("Add Calories", value=0, step=100)
         if st.button("Update Metrics"):
@@ -175,12 +176,15 @@ def main():
             save_user_data(username, user_data)
             st.rerun()
         st.markdown("</div>", unsafe_allow_html=True)
+        
         if st.button("Logout", use_container_width=True):
             st.session_state.logged_in_user = None
             st.rerun()
-        if st.button("🛑 Reset Profile", use_container_width=True):
-            os.remove(get_user_file(username))
-            st.session_state.logged_in_user = None
+            
+        if st.button("🔄 Reset Health Profile", use_container_width=True):
+            reset_data = {"password": user_data["password"], "onboarded": False}
+            save_user_data(username, reset_data)
+            st.session_state.user_data = reset_data
             st.rerun()
 
     # --- D. DASHBOARD ---
@@ -201,7 +205,7 @@ def main():
     with k5: 
         st.markdown(f"<div class='pulse-card'><span class='metric-title'>Goal Focus</span><span class='metric-value' style='font-size:1.1rem;'>{user_data['goal']}</span></div>", unsafe_allow_html=True)
 
-    # --- TABS (Nutrition First Order) ---
+    # --- TABS ---
     t1, t2, t3, t4 = st.tabs(["🥗 NUTRITION", "🏋️ TRAINING", "📈 TRENDS", "💬 SMART COACH"])
     
     with t1: 
@@ -217,8 +221,7 @@ def main():
             st.markdown("### Weight Progress (Last 14 Days)")
             df = pd.DataFrame(user_data['weight_log']).set_index('date')
             st.line_chart(df)
-        else: 
-            st.info("No trend data yet. Update your metrics in the sidebar!")
+        else: st.info("No trend data yet. Update your metrics in the sidebar!")
             
     with t4:
         st.markdown("### Chat with Pulse AI")
