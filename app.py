@@ -77,12 +77,13 @@ def handle_chat():
     save_user_data(username, user_data)
     st.session_state.chat_input_box = ""
 
-# --- 4. UI STYLING ---
+# --- 4. UI STYLING (Premium iOS) ---
 st.set_page_config(page_title="Pulse AI", page_icon="⚡", layout="wide")
 st.markdown("""
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
     .stApp { background-color: #FAFAFA; color: #1C1C1E; font-family: 'Inter', sans-serif; }
+    h1 { font-weight: 700; letter-spacing: -0.5px; color: #1C1C1E; }
     .pulse-card {
         background: #FFFFFF; border-radius: 24px; padding: 22px;
         box-shadow: 0 4px 20px rgba(0,0,0,0.03); border: 1px solid rgba(0,0,0,0.04);
@@ -101,9 +102,9 @@ def main():
     if 'logged_in_user' not in st.session_state:
         st.session_state.logged_in_user = None
 
-    # --- A. LOGIN & SIGNUP ---
+    # --- A. LOGIN & SIGNUP (Branded) ---
     if st.session_state.logged_in_user is None:
-        st.title("⚡ Pulse AI Portal")
+        st.title("⚡ Pulse AI — Digital Health")
         tab1, tab2 = st.tabs(["Login", "Create Account"])
         with tab1:
             u_login = st.text_input("Username", key="l_user").lower().strip()
@@ -123,16 +124,16 @@ def main():
                     if os.path.exists(get_user_file(u_signup)): st.error("Username exists")
                     else:
                         save_user_data(u_signup, {"password": p_signup, "onboarded": False})
-                        st.success("Account created! Switch to Login.")
+                        st.success("Account created! Switch to Login tab.")
         return
 
     user_data = st.session_state.user_data
     username = st.session_state.logged_in_user
 
-    # --- B. ONBOARDING (Soft Reset aware) ---
+    # --- B. ONBOARDING ---
     if user_data.get("onboarded") is False:
         st.title(f"Welcome back, {username.capitalize()}!")
-        st.subheader("Configure your new protocol")
+        st.subheader("Configure your protocol")
         with st.form("onboard"):
             c1, c2 = st.columns(2)
             name = c1.text_input("Full Name")
@@ -159,7 +160,7 @@ def main():
                     st.rerun()
         return
 
-    # --- C. SIDEBAR (Soft Reset Integrated) ---
+    # --- C. SIDEBAR (With Soft Reset) ---
     with st.sidebar:
         st.markdown(f"### 👤 {user_data.get('name', 'User')}")
         st.markdown("<div class='sidebar-box'>", unsafe_allow_html=True)
@@ -187,8 +188,9 @@ def main():
             st.session_state.user_data = reset_data
             st.rerun()
 
-    # --- D. DASHBOARD ---
-    st.markdown("<h1>⚡ Pulse Dashboard</h1>", unsafe_allow_html=True)
+    # --- D. DASHBOARD HEADER (Personalized) ---
+    st.markdown(f"<h1>{user_data['name']}'s Digital Health</h1>", unsafe_allow_html=True)
+    
     k1, k2, k3, k4, k5 = st.columns(5)
     with k1: 
         st.markdown(f"<div class='pulse-card'><span class='metric-title'>Recovery</span><span class='metric-value'>{user_data['readiness']}%</span><div class='progress-bg'><div class='progress-fill' style='width:{user_data['readiness']}%; background:#34C759;'></div></div></div>", unsafe_allow_html=True)
@@ -209,23 +211,23 @@ def main():
     t1, t2, t3, t4 = st.tabs(["🥗 NUTRITION", "🏋️ TRAINING", "📈 TRENDS", "💬 SMART COACH"])
     
     with t1: 
-        st.markdown(f"### Daily Fuel Plan for {user_data['name']}")
+        st.markdown(f"### Daily Fuel Plan")
         st.markdown(f"<div style='background:white; padding:25px; border-radius:24px; border:1px solid #EEE; color:#1C1C1E;'>{user_data['diet_plan']}</div>", unsafe_allow_html=True)
     
     with t2: 
-        st.markdown(f"### Training Protocol: {user_data['goal']}")
+        st.markdown(f"### Training Protocol")
         st.markdown(f"<div style='background:white; padding:25px; border-radius:24px; border:1px solid #EEE; color:#1C1C1E;'>{user_data['fit_plan']}</div>", unsafe_allow_html=True)
     
     with t3:
         if len(user_data['weight_log']) > 0:
-            st.markdown("### Weight Progress (Last 14 Days)")
+            st.markdown("### Weight Progress")
             df = pd.DataFrame(user_data['weight_log']).set_index('date')
             st.line_chart(df)
         else: st.info("No trend data yet. Update your metrics in the sidebar!")
             
     with t4:
         st.markdown("### Chat with Pulse AI")
-        st.text_input("Ask about your diet, workouts, or log progress...", key="chat_input_box", on_change=handle_chat, placeholder="e.g., 'Log 400 calories'")
+        st.text_input("Talk to your coach...", key="chat_input_box", on_change=handle_chat, placeholder="e.g., 'What should I eat for dinner?'")
         st.markdown("---")
         for msg in user_data['chat_history']:
             with st.chat_message(msg["role"]): 
