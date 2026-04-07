@@ -7,358 +7,398 @@ from datetime import datetime
 from agno.agent import Agent
 from agno.models.groq import Groq
 
-# --- 1. SECURE CONFIGURATION ---
-# Robust error handling for API keys in production environments
+# ==============================================================================
+# 1. SYSTEM CORE & SECURE CONFIGURATION
+# ==============================================================================
+# We use st.secrets for production-grade security. 
+# This ensures API keys are never hardcoded in the script.
 try:
-    my_groq_key = st.secrets["GROQ_API_KEY"]
-except Exception:
-    st.error("FATAL ERROR: GROQ_API_KEY not found in Streamlit Secrets.")
+    GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
+except Exception as e:
+    st.error("🚨 CONFIGURATION ERROR: GROQ_API_KEY is missing from Streamlit Secrets.")
+    st.info("Please add your key to .streamlit/secrets.toml or the Streamlit Cloud dashboard.")
     st.stop()
 
-# --- 2. DATA PERSISTENCE ENGINE ---
-def get_user_file(username):
-    """Generates a unique filename for each user's database."""
-    return f"data_{username}.json"
+# ==============================================================================
+# 2. DATA PERSISTENCE LAYER (JSON ENGINE)
+# ==============================================================================
+def get_user_database_path(username):
+    """Generates a standardized filename for user data persistence."""
+    clean_username = username.lower().strip()
+    return f"db_user_{clean_username}.json"
 
-def save_user_data(username, data):
-    """Saves the entire user state to a local JSON file."""
-    with open(get_user_file(username), "w") as f:
-        json.dump(data, f, indent=4)
+def save_user_state(username, data_object):
+    """Writes the current session state to a permanent JSON file."""
+    file_path = get_user_database_path(username)
+    with open(file_path, "w", encoding='utf-8') as database_file:
+        json.dump(data_object, database_file, indent=4)
 
-def load_user_data(username):
-    """Loads user data; returns None if the user is not found."""
-    filename = get_user_file(username)
-    if os.path.exists(filename):
+def load_user_state(username):
+    """Retrieves user data from storage. Returns None if user does not exist."""
+    file_path = get_user_database_path(username)
+    if os.path.exists(file_path):
         try:
-            with open(filename, "r") as f:
-                return json.load(f)
-        except Exception:
+            with open(file_path, "r", encoding='utf-8') as database_file:
+                return json.load(database_file)
+        except (json.JSONDecodeError, IOError):
             return None
     return None
 
-def add_trend_entry(log, value):
-    """Updates the 14-day rolling weight trend log."""
-    today = datetime.now().strftime("%Y-%m-%d")
-    # Update entry if today's date already exists
-    for entry in log:
-        if entry['date'] == today:
-            entry['value'] = value
-            return log
-    # Otherwise, append new weight entry
-    log.append({"date": today, "value": value})
-    # Maintain a clean 14-day window for charting
-    return log[-14:] 
+def update_weight_trajectory(weight_log, new_weight_value):
+    """
+    Manages a 14-day rolling window of weight data for trend analysis.
+    Ensures that only one data point exists per calendar day.
+    """
+    current_date_string = datetime.now().strftime("%Y-%m-%d")
+    
+    # Check if we already have an entry for today
+    existing_entry_found = False
+    for entry in weight_log:
+        if entry['date'] == current_date_string:
+            entry['value'] = float(new_weight_value)
+            existing_entry_found = True
+            break
+            
+    if not existing_entry_found:
+        weight_log.append({
+            "date": current_date_string, 
+            "value": float(new_weight_value)
+        })
+    
+    # Prune list to keep only the last 14 entries for the UI chart
+    return weight_log[-14:] 
 
-# --- 3. CORE HEALTH ALGORITHMS ---
-def calculate_dynamic_target(user_data):
+# ==============================================================================
+# 3. BIOMETRIC ALGORITHMS
+# ==============================================================================
+def calculate_metabolic_targets(user_metadata):
     """
-    Implements the Mifflin-St Jeor Equation with Real-Time Activity Adjustments.
-    Calculates the 'Fuel Target' based on biometric data and daily movement.
+    Implements the Mifflin-St Jeor Equation to determine Basal Metabolic Rate (BMR).
+    Then applies activity bonuses and goal-specific caloric offsets.
     """
-    # Extract current metrics
-    weight_kg = float(user_data.get('weight', 70))
-    height_cm = float(user_data.get('height_cm', 170))
-    age_years = int(user_data.get('age', 30))
+    # 1. Extract and cast variables safely
+    current_w = float(user_metadata.get('weight', 70))
+    current_h = float(user_metadata.get('height_cm', 175))
+    current_a = int(user_metadata.get('age', 30))
     
-    # Calculate Base Metabolic Rate (BMR)
-    # Formula: (10 × weight) + (6.25 × height) - (5 × age) + 5
-    bmr_base = (10 * weight_kg) + (6.25 * height_cm) - (5 * age_years) + 5
+    # 2. Base BMR Calculation
+    # Formula: (10 × weight_kg) + (6.25 × height_cm) - (5 × age) + 5
+    bmr_result = (10 * current_w) + (6.25 * current_h) - (5 * current_a) + 5
     
-    # Apply Goal-Specific Offsets
-    user_goal = user_data.get('goal', 'Longevity')
-    if user_goal == "Fat Loss":
-        goal_offset = -500
-    elif user_goal == "Muscle Build":
-        goal_offset = 350
+    # 3. Apply Goal Offset
+    target_goal = user_metadata.get('goal', 'Longevity')
+    if target_goal == "Fat Loss":
+        net_offset = -500
+    elif target_goal == "Muscle Build":
+        net_offset = 350
     else:
-        goal_offset = 0
+        net_offset = 0
         
-    # Apply Dynamic Step Bonus (0.04 kcal burned per step)
-    daily_steps = user_data.get('daily_steps', 0)
-    step_bonus = daily_steps * 0.04
+    # 4. Activity Bonus (Thermal Effect of Activity)
+    # Estimate: ~0.04 calories burned per step
+    step_count = user_metadata.get('daily_steps', 0)
+    activity_bonus = step_count * 0.04
     
-    # Final Dynamic Calculation
-    total_target = int(bmr_base + goal_offset + step_bonus)
-    return total_target
+    # 5. Final Synthesis
+    calculated_fuel_target = int(bmr_result + net_offset + activity_bonus)
+    return calculated_fuel_target
 
-# --- 4. AI AGENT & NLP COMMAND CENTER ---
-def handle_chat():
-    """Processes user chat and automates metric logging via Natural Language."""
-    user_input = st.session_state.chat_input_box
-    if not user_input: 
+# ==============================================================================
+# 4. MULTI-AGENT ORCHESTRATION & NLP
+# ==============================================================================
+def process_agent_interaction():
+    """
+    The 'Brain' of Pulse AI. Intercepts chat messages, uses Groq-powered agents
+     to extract health data, and updates the system state automatically.
+    """
+    raw_user_prompt = st.session_state.chat_input_box
+    if not raw_user_prompt:
         return
     
-    user_data = st.session_state.user_data
-    username = st.session_state.logged_in_user
+    current_session_data = st.session_state.user_data
+    current_username = st.session_state.logged_in_user
     
-    # Record user message in history
-    user_data['chat_history'].insert(0, {"role": "user", "content": user_input})
+    # Log user message to session history
+    current_session_data['chat_history'].insert(0, {
+        "role": "user", 
+        "content": raw_user_prompt
+    })
     
-    # Initialize Pulse AI Coach
-    health_coach = Agent(
-        model=Groq(id="llama-3.3-70b-versatile", api_key=my_groq_key), 
+    # Initialize the Agno/Groq Agent
+    # This agent is instructed to look for 'logging' intent.
+    health_intelligence_agent = Agent(
+        model=Groq(id="llama-3.3-70b-versatile", api_key=GROQ_API_KEY), 
         instructions=[
-            f"You are Pulse AI, the elite digital health coach for {user_data.get('name')}.",
-            "You have the power to update health metrics using the following syntax:",
-            "If the user mentions food or calories, reply with: UPDATE: calories [value].",
-            "If the user mentions steps or walking, reply with: UPDATE: steps [value].",
-            "If the user mentions weight or scale results, reply with: UPDATE: weight [value].",
-            "If the user mentions fatigue, sleep, or recovery, reply with: UPDATE: recovery [value].",
-            "Always provide specific, data-backed health advice in addition to commands."
+            f"You are the Pulse AI High-Performance Coach for {current_session_data.get('name')}.",
+            "Your primary goal is to provide elite health advice and manage the user's data.",
+            "CRITICAL: If the user provides a numeric health update, you MUST reply with a command.",
+            "COMMAND FORMATS:",
+            "- UPDATE: calories [number] (for food/meals)",
+            "- UPDATE: steps [number] (for movement)",
+            "- UPDATE: weight [number] (for body mass)",
+            "- UPDATE: recovery [number] (for readiness/sleep/fatigue)",
+            "Always follow the command with a 1-sentence supportive response."
         ]
     )
     
-    # Execute AI reasoning
-    ai_response = health_coach.run(user_input).content
+    # Execute Agent Reasoning
+    agent_execution_result = health_intelligence_agent.run(raw_user_prompt)
+    ai_generated_text = agent_execution_result.content
     
-    # Command Parsing Engine
-    if "UPDATE:" in ai_response:
-        numbers_found = re.findall(r'\d+\.?\d*', ai_response)
-        if numbers_found:
-            extracted_val = float(numbers_found[0])
+    # Command Parsing Logic (Regex extraction)
+    if "UPDATE:" in ai_generated_text:
+        extracted_numbers = re.findall(r'\d+\.?\d*', ai_generated_text)
+        if extracted_numbers:
+            parsed_value = float(extracted_numbers[0])
+            lowercase_response = ai_generated_text.lower()
             
-            if "calories" in ai_response.lower():
-                user_data['daily_calories'] += int(extracted_val)
-            elif "steps" in ai_response.lower():
-                user_data['daily_steps'] += int(extracted_val)
-            elif "recovery" in ai_response.lower():
-                # Bound recovery between 0 and 100
-                user_data['readiness'] = min(100, max(0, int(extracted_val)))
-            elif "weight" in ai_response.lower():
-                user_data['weight'] = extracted_val
-                # Recalculate BMI on weight change
-                user_data['bmi'] = round(extracted_val / ((user_data['height_cm'] / 100)**2), 1)
-                user_data['weight_log'] = add_trend_entry(user_data['weight_log'], extracted_val)
-    else:
-        # Save standard AI response to history
-        user_data['chat_history'].insert(1, {"role": "assistant", "content": ai_response})
+            if "calories" in lowercase_response:
+                current_session_data['daily_calories'] += int(parsed_value)
+            elif "steps" in lowercase_response:
+                current_session_data['daily_steps'] += int(parsed_value)
+            elif "recovery" in lowercase_response:
+                current_session_data['readiness'] = min(100, max(0, int(parsed_value)))
+            elif "weight" in lowercase_response:
+                current_session_data['weight'] = parsed_value
+                # Recalculate BMI and update weight trend log
+                h_m = current_session_data['height_cm'] / 100
+                current_session_data['bmi'] = round(parsed_value / (h_m * h_m), 1)
+                current_session_data['weight_log'] = update_weight_trajectory(
+                    current_session_data['weight_log'], 
+                    parsed_value
+                )
     
-    # Save session state
-    save_user_data(username, user_data)
+    # Append the assistant's response to the history
+    current_session_data['chat_history'].insert(1, {
+        "role": "assistant", 
+        "content": ai_generated_text
+    })
+    
+    # Commit changes to database
+    save_user_state(current_username, current_session_data)
     st.session_state.chat_input_box = ""
 
-# --- 5. PREMIUM UI THEMING & CSS ---
-st.set_page_config(page_title="Pulse AI", page_icon="⚡", layout="wide")
+# ==============================================================================
+# 5. HIGH-FIDELITY CSS (ASK-MYDOCS STYLE)
+# ==============================================================================
+st.set_page_config(page_title="Pulse AI | Digital Health", page_icon="⚡", layout="wide")
+
 st.markdown("""
     <style>
+    /* Import Inter for that premium Vercel aesthetic */
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
     
-    /* Global App Background */
-    .stApp { background-color: #FAFAFA; color: #1C1C1E; font-family: 'Inter', sans-serif; }
-    
-    /* Header Typography */
-    h1 { font-weight: 700; letter-spacing: -0.5px; color: #1C1C1E; margin-bottom: 25px; }
-    
-    /* KPI Command Center Cards */
-    .pulse-card {
-        background: #FFFFFF; border-radius: 24px; padding: 22px;
-        box-shadow: 0 4px 20px rgba(0,0,0,0.03); border: 1px solid rgba(0,0,0,0.04);
-        height: 165px; display: flex; flex-direction: column; justify-content: space-between;
+    /* Root App Background - Clean Minimalist White */
+    .stApp {
+        background-color: #FFFFFF;
+        color: #111111;
+        font-family: 'Inter', sans-serif;
     }
-    .metric-title { color: #8E8E93; font-size: 0.75rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.8px; }
-    .metric-value { color: #111111; font-size: 2.2rem; font-weight: 700; line-height: 1; }
-    .metric-subtext { color: #8E8E93; font-size: 0.8rem; margin-top: 5px; }
     
-    /* Modern Progress Bars */
-    .progress-bg { background: #F2F2F7; border-radius: 10px; height: 8px; width: 100%; margin-top: 10px; overflow: hidden; }
-    .progress-fill { height: 100%; border-radius: 10px; transition: width 0.8s ease-in-out; }
+    /* Style Chat Bubbles to match Ask-MyDocs */
+    .stChatMessage {
+        background-color: #FFFFFF !important;
+        border: 1px solid #F3F4F6 !important;
+        border-radius: 12px !important;
+        padding: 1.25rem !important;
+        margin-bottom: 1.25rem !important;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.02) !important;
+    }
     
-    /* Sidebar Components */
-    .sidebar-container { background: #FFFFFF; border-radius: 16px; padding: 18px; border: 1px solid #E5E5EA; margin-bottom: 20px; }
+    /* Sidebar Navigation Styling */
+    section[data-testid="stSidebar"] {
+        background-color: #FAFAFA !important;
+        border-right: 1px solid #E5E7EB !important;
+    }
     
-    /* Tab Navigation Styling */
-    .stTabs [aria-selected="true"] { background: #111111 !important; color: #FFFFFF !important; border-radius: 12px !important; }
+    /* KPI Card Component for Sidebar */
+    .kpi-container {
+        border: 1px solid #E5E7EB;
+        background-color: #FFFFFF;
+        border-radius: 12px;
+        padding: 16px;
+        margin-bottom: 12px;
+        box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+    }
+    .kpi-header {
+        font-size: 0.65rem;
+        font-weight: 600;
+        color: #6B7280;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        margin-bottom: 4px;
+    }
+    .kpi-body {
+        font-size: 1.25rem;
+        font-weight: 700;
+        color: #111111;
+    }
+    
+    /* Clean Tab Navigation */
+    .stTabs [aria-selected="true"] {
+        background-color: #F3F4F6 !important;
+        color: #111111 !important;
+        border-radius: 8px !important;
+        font-weight: 600 !important;
+    }
+
+    /* Input Bar Positioning */
+    .stChatInputContainer {
+        padding-bottom: 30px;
+    }
+    
+    /* Hide default Streamlit elements for "Pure App" feel */
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+    header {visibility: hidden;}
     </style>
     """, unsafe_allow_html=True)
 
-# --- 6. APPLICATION ROUTING & VIEW LOGIC ---
+# ==============================================================================
+# 6. MAIN APPLICATION FLOW
+# ==============================================================================
 def main():
+    # 1. Initialize Authentication State
     if 'logged_in_user' not in st.session_state:
         st.session_state.logged_in_user = None
 
-    # --- PHASE 1: AUTHENTICATION ---
+    # --- LANDING & AUTHENTICATION PHASE ---
     if st.session_state.logged_in_user is None:
-        st.title("⚡ Pulse AI — Digital Health")
-        tab_login, tab_signup = st.tabs(["Secure Login", "Create Profile"])
+        st.title("⚡ Pulse AI")
+        st.markdown("##### The Multi-Agent Health Command Center")
         
-        with tab_login:
-            user_in = st.text_input("Username").lower().strip()
-            pass_in = st.text_input("Password", type="password")
-            if st.button("Unlock Dashboard", use_container_width=True):
-                existing_data = load_user_data(user_in)
-                if existing_data and existing_data.get("password") == pass_in:
-                    st.session_state.logged_in_user = user_in
-                    st.session_state.user_data = existing_data
+        login_tab, signup_tab = st.tabs(["Secure Login", "Create Account"])
+        
+        with login_tab:
+            auth_user = st.text_input("Username").lower().strip()
+            auth_pass = st.text_input("Password", type="password")
+            if st.button("Access Pulse Dashboard", use_container_width=True):
+                db_record = load_user_state(auth_user)
+                if db_record and db_record.get("password") == auth_pass:
+                    st.session_state.logged_in_user = auth_user
+                    st.session_state.user_data = db_record
                     st.rerun()
                 else:
-                    st.error("Invalid credentials. Access Denied.")
+                    st.error("Authentication failed. Please verify credentials.")
         
-        with tab_signup:
-            user_new = st.text_input("New Username").lower().strip()
-            pass_new = st.text_input("New Password", type="password")
-            if st.button("Register Digital Health Account", use_container_width=True):
-                if user_new and pass_new:
-                    if os.path.exists(get_user_file(user_new)):
-                        st.error("Username already registered.")
+        with signup_tab:
+            new_user = st.text_input("Choose Username").lower().strip()
+            new_pass = st.text_input("Choose Password", type="password")
+            if st.button("Initialize New Profile", use_container_width=True):
+                if new_user and new_pass:
+                    if os.path.exists(get_user_database_path(new_user)):
+                        st.error("Account identity already registered.")
                     else:
-                        save_user_data(user_new, {"password": pass_new, "onboarded": False})
-                        st.success("Account Secured. Proceed to Login.")
+                        initial_config = {"password": new_pass, "onboarded": False}
+                        save_user_state(new_user, initial_config)
+                        st.success("Account created successfully. Please login.")
         return
 
-    # --- PHASE 2: ONBOARDING & BIO-SYNTHESIS ---
-    user_data = st.session_state.user_data
+    # --- USER CONTEXT ---
+    user_state = st.session_state.user_data
     username = st.session_state.logged_in_user
 
-    if not user_data.get("onboarded"):
-        st.title(f"Bio-Digital Protocol for {username.capitalize()}")
-        with st.form("onboarding_suite"):
-            col_left, col_right = st.columns(2)
-            name_val = col_left.text_input("Legal Name")
-            age_val = col_left.number_input("Biological Age", 18, 100, 28)
-            ft_val = col_left.selectbox("Height (Feet)", [4, 5, 6, 7], index=1)
-            in_val = col_left.selectbox("Height (Inches)", list(range(12)), index=9)
+    # --- ONBOARDING PHASE (Bio-Protocol Generation) ---
+    if not user_state.get("onboarded"):
+        st.markdown("### Protocol Configuration")
+        st.write("We need to establish your biological baseline to calibrate the Pulse Agents.")
+        
+        with st.form("onboarding_matrix"):
+            left, right = st.columns(2)
+            u_name = left.text_input("Full Name")
+            u_age = left.number_input("Biological Age", 18, 100, 28)
+            u_height = left.number_input("Height (cm)", 100, 250, 175)
             
-            weight_val = col_right.number_input("Current Weight (kg)", 40.0, 200.0, 70.0)
-            goal_val = col_right.selectbox("Protocol Goal", ["Fat Loss", "Muscle Build", "Longevity", "Performance"])
-            diet_val = col_right.selectbox("Dietary Foundation", ["Vegetarian", "Non-vegetarian", "Keto", "Vegan", "Paleo"])
+            u_weight = right.number_input("Current Weight (kg)", 40.0, 200.0, 75.0)
+            u_goal = right.selectbox("Primary Directive", ["Fat Loss", "Muscle Build", "Longevity", "Performance"])
+            u_diet = right.selectbox("Nutritional Preference", ["Vegetarian", "Vegan", "Keto", "Omnivore"])
             
-            if st.form_submit_button("Synthesize Health Plan"):
-                with st.spinner("AI is calculating your metabolic protocols..."):
-                    cm_total = (ft_val * 30.48) + (in_val * 2.54)
-                    groq_model = Groq(id="llama-3.3-70b-versatile", api_key=my_groq_key)
+            if st.form_submit_button("Synthesize Health Protocol"):
+                with st.spinner("Multi-Agent Synthesis in progress..."):
+                    groq_llm = Groq(id="llama-3.3-70b-versatile", api_key=GROQ_API_KEY)
+                    # Agent 1: Nutrition Expert
+                    diet_p = Agent(model=groq_llm).run(f"Create a high-performance {u_diet} plan for {u_goal}").content
+                    # Agent 2: Exercise Physiologist
+                    fit_p = Agent(model=groq_llm).run(f"Create an elite training routine for {u_goal}").content
                     
-                    # AI-generated custom plans
-                    diet_response = Agent(model=groq_model).run(f"Detailed {diet_val} plan for {goal_val}").content
-                    workout_response = Agent(model=groq_model).run(f"Detailed training plan for {goal_val}").content
-                    
-                    user_data.update({
+                    user_state.update({
                         "onboarded": True,
-                        "name": name_val, "age": age_val, "weight": weight_val, "height_cm": cm_total,
-                        "goal": goal_val, "diet_plan": diet_response, "fit_plan": workout_response,
+                        "name": u_name, "age": u_age, "weight": u_weight, "height_cm": u_height,
+                        "goal": u_goal, "diet_plan": diet_p, "fit_plan": fit_p,
                         "readiness": 85, "daily_steps": 0, "daily_calories": 0,
-                        "bmi": round(weight_val / ((cm_total/100)**2), 1),
+                        "bmi": round(u_weight / ((u_height/100)**2), 1),
                         "chat_history": [],
-                        "weight_log": [{"date": datetime.now().strftime("%Y-%m-%d"), "value": weight_val}]
+                        "weight_log": [{"date": datetime.now().strftime("%Y-%m-%d"), "value": u_weight}]
                     })
-                    save_user_data(username, user_data)
+                    save_user_state(username, user_state)
                     st.rerun()
         return
 
-    # --- PHASE 3: SIDEBAR CONTROL CENTER ---
+    # --- SIDEBAR (METADATA & KPI COMMANDS) ---
     with st.sidebar:
-        st.markdown(f"### 👤 Profile: {user_data.get('name')}")
-        st.markdown("<div class='sidebar-container'>", unsafe_allow_html=True)
-        st.write("📈 **Metric Log**")
+        st.markdown(f"#### 👤 {user_state['name']}")
+        st.markdown(f"<p style='color:#6B7280; font-size:0.8rem;'>Protocol: {user_state['goal']}</p>", unsafe_allow_html=True)
+        st.divider()
         
-        # Immediate inputs for dashboard sync
-        in_weight = st.number_input("Body Mass (kg)", value=float(user_data['weight']), step=0.1)
-        in_recovery = st.slider("Readiness Score %", 0, 100, int(user_data.get('readiness', 85)))
-        in_steps = st.number_input("Log Steps", value=0, step=500)
-        in_cals = st.number_input("Log Calories", value=0, step=100)
+        # Calculate metabolic target for the Fuel KPI
+        daily_fuel_goal = calculate_metabolic_targets(user_state)
         
-        if st.button("Sync Vitality Data", use_container_width=True):
-            user_data['weight'] = in_weight
-            user_data['readiness'] = in_recovery
-            user_data['daily_steps'] += in_steps
-            user_data['daily_calories'] += in_cals
-            user_data['bmi'] = round(in_weight / ((user_data['height_cm'] / 100)**2), 1)
-            user_data['weight_log'] = add_trend_entry(user_data['weight_log'], in_weight)
-            save_user_data(username, user_data)
+        # Display KPIs in minimalist "Ask-MyDocs" Cards
+        kpi_list = [
+            ("Current Readiness", f"{user_state['readiness']}%"),
+            ("Accumulated Steps", f"{user_state['daily_steps']:,}"),
+            ("Caloric Intake", f"{user_state['daily_calories']} / {daily_fuel_goal}"),
+            ("Body Mass Index", f"{user_state['bmi']}")
+        ]
+        
+        for k_label, k_val in kpi_list:
+            st.markdown(f"""
+                <div class='kpi-container'>
+                    <div class='kpi-header'>{k_label}</div>
+                    <div class='kpi-body'>{k_val}</div>
+                </div>
+            """, unsafe_allow_html=True)
+            
+        st.divider()
+        
+        # Utility Controls
+        if st.button("Reset Protocol", use_container_width=True):
+            user_state["onboarded"] = False
+            save_user_state(username, user_state)
             st.rerun()
-        st.markdown("</div>", unsafe_allow_html=True)
-        
-        if st.button("Log Out Session", use_container_width=True):
+            
+        if st.button("Terminate Session", use_container_width=True):
             st.session_state.logged_in_user = None
             st.rerun()
-            
-        if st.button("Reset Health Protocol", use_container_width=True):
-            user_data["onboarded"] = False
-            save_user_data(username, user_data)
-            st.rerun()
 
-    # --- PHASE 4: 5-TILE KPI COMMAND CENTER ---
-    st.markdown(f"<h1>{user_data['name']}'s Intelligence Dashboard</h1>", unsafe_allow_html=True)
-    
-    current_fuel_cap = calculate_dynamic_target(user_data)
-    col_1, col_2, col_3, col_4, col_5 = st.columns(5)
-    
-    with col_1: # Recovery Tile
-        readiness_score = user_data.get('readiness', 85)
-        # Dynamic color mapping for recovery status
-        bar_color = "#34C759" if readiness_score > 75 else "#FFCC00" if readiness_score > 45 else "#FF3B30"
-        st.markdown(f"""
-            <div class='pulse-card'>
-                <span class='metric-title'>Recovery</span>
-                <span class='metric-value'>{readiness_score}%</span>
-                <div class='progress-bg'><div class='progress-fill' style='width:{readiness_score}%; background:{bar_color};'></div></div>
-            </div>
-        """, unsafe_allow_html=True)
+    # --- MAIN STAGE (TABS: CHAT, PROTOCOLS, ANALYTICS) ---
+    chat_view, protocol_view, trend_view = st.tabs(["💬 Intelligence Chat", "📋 Protocol Specs", "📈 Bio-Trends"])
 
-    with col_2: # Step Counter Tile
-        actual_steps = user_data.get('daily_steps', 0)
-        goal_step_pct = min(100, (actual_steps / 10000) * 100)
-        st.markdown(f"""
-            <div class='pulse-card'>
-                <span class='metric-title'>Total Steps</span>
-                <span class='metric-value'>{actual_steps:,}</span>
-                <div class='progress-bg'><div class='progress-fill' style='width:{goal_step_pct}%; background:#007AFF;'></div></div>
-            </div>
-        """, unsafe_allow_html=True)
+    with chat_view:
+        # Render the Message History
+        for message in user_state['chat_history']:
+            with st.chat_message(message["role"]):
+                st.markdown(message["content"])
+        
+        # Floating Input Bar
+        st.chat_input(
+            "Talk to Pulse AI... (e.g., 'Log 2500 steps' or 'I feel tired today')", 
+            key="chat_input_box", 
+            on_submit=process_agent_interaction
+        )
 
-    with col_3: # BMI Calculation Tile
-        bmi_current = user_data.get('bmi', 22.0)
-        st.markdown(f"""
-            <div class='pulse-card'>
-                <span class='metric-title'>BMI Index</span>
-                <span class='metric-value'>{bmi_current}</span>
-                <span class='metric-subtext'>Relative Body Mass</span>
-            </div>
-        """, unsafe_allow_html=True)
+    with protocol_view:
+        tab_nut, tab_fit = st.tabs(["🥗 Nutrition Protocol", "🏋️ Training Protocol"])
+        with tab_nut:
+            st.markdown(f"<div style='line-height:1.6;'>{user_state['diet_plan']}</div>", unsafe_allow_html=True)
+        with tab_fit:
+            st.markdown(f"<div style='line-height:1.6;'>{user_state['fit_plan']}</div>", unsafe_allow_html=True)
 
-    with col_4: # Dynamic Fuel Tile
-        actual_cals = user_data.get('daily_calories', 0)
-        fuel_consumption_pct = min(100, (actual_cals / current_fuel_cap) * 100)
-        st.markdown(f"""
-            <div class='pulse-card'>
-                <span class='metric-title'>Fuel Intake</span>
-                <span class='metric-value'>{actual_cals} <small style='font-size:14px; color:#8E8E93;'>/ {current_fuel_cap}</small></span>
-                <div class='progress-bg'><div class='progress-fill' style='width:{fuel_consumption_pct}%; background:#FF9500;'></div></div>
-            </div>
-        """, unsafe_allow_html=True)
-
-    with col_5: # Protocol Goal Tile
-        display_goal = user_data.get('goal', 'LONGEVITY').upper()
-        st.markdown(f"""
-            <div class='pulse-card'>
-                <span class='metric-title'>Active Goal</span>
-                <span class='metric-value' style='font-size:1.1rem;'>{display_goal}</span>
-                <span class='metric-subtext'>AI Optimized Strategy</span>
-            </div>
-        """, unsafe_allow_html=True)
-
-    # --- PHASE 5: INTELLIGENCE TABS ---
-    t_nutrition, t_training, t_trends, t_coach = st.tabs(["🥗 NUTRITION", "🏋️ TRAINING", "📈 TRENDS", "💬 SMART COACH"])
-    
-    with t_nutrition: 
-        st.markdown("### Personalized Metabolic Diet Plan")
-        st.markdown(f"<div style='background:white; padding:35px; border-radius:24px; border:1px solid #EEE; color:#1C1C1E; line-height:1.7;'>{user_data['diet_plan']}</div>", unsafe_allow_html=True)
-    
-    with t_training: 
-        st.markdown("### Precision Strength & Performance Routine")
-        st.markdown(f"<div style='background:white; padding:35px; border-radius:24px; border:1px solid #EEE; color:#1C1C1E; line-height:1.7;'>{user_data['fit_plan']}</div>", unsafe_allow_html=True)
-    
-    with t_trends:
-        st.markdown("### Weight Trajectory Analysis")
-        historical_df = pd.DataFrame(user_data['weight_log']).set_index('date')
-        st.line_chart(historical_df, color="#007AFF")
-            
-    with t_coach:
-        st.markdown("### Communicate with Pulse AI")
-        st.text_input("Enter command or question...", key="chat_input_box", on_change=handle_chat, placeholder="e.g. 'I just ate 400 calories' or 'Set recovery to 90%'")
-        st.markdown("---")
-        for message_obj in user_data['chat_history']:
-            with st.chat_message(message_obj["role"]):
-                st.markdown(message_obj["content"])
+    with trend_view:
+        st.subheader("Body Mass Trajectory (14 Days)")
+        # Convert weight log to DataFrame for high-fidelity charting
+        df_trends = pd.DataFrame(user_state['weight_log']).set_index('date')
+        st.line_chart(df_trends, color="#111111")
 
 if __name__ == "__main__":
     main()
